@@ -346,7 +346,7 @@ exec /usr/bin/env $(which mailcatcher) --foreground --http-ip=0.0.0.0
 
 We have to now build an image from the Dockerfile;
 
-$docker build –t wordpress_secure .
+$docker build –t wordpress:wordpress_secure .
 
 Here we are building an image from the associated Dockerfile. The –t is the tag(wordpress_secure) and the trailing “.” means to use the Dockerfile present in the current directory.
 
@@ -359,7 +359,7 @@ Creating WordPress service
            --env WORDPRESS_DB_HOST=wordpressdb \
            --env WORDPRESS_DB_PASSWORD=mysql123 \
           -- constraint  ‘node.id == xf323rkhg80qy2pywkjkxqusp’ \
-          wordpress_secure
+          wordpress:wordpress_secure
 
 
 
