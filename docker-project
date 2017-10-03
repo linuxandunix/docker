@@ -1,0 +1,379 @@
+Project:
+
+Create Dockerized instances of Wordpress and Database running on two different hosts.
+Secure the Wordpress and Apache.
+Install self-signed SSL certificates.
+Install Mail catcher.
+Install WP-CLI
+
+
+
+Solution:
+
+
+Step-1: (Install Docker on the hosts)
+
+
+1. Prepare two hosts. These could be physical servers, Virtual machines, or cloud instances (preferably Linux). Here we have used Ubuntu 16.04.
+2. Install Docker on both;
+
+Install using the repository
+Before you install Docker CE for the first time on a new host machine, you need to set up the Docker repository. Afterward, you can install and update Docker from the repository.
+
+SET UP THE REPOSITORY
+
+Update the apt package index:
+
+$ sudo apt-get update
+
+Install packages to allow apt to use a repository over HTTPS:
+
+$ sudo apt-get install \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    software-properties-common
+
+Add Docker’s official GPG key:
+
+$ curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+
+Verify that you now have the key with the fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88, by searching for the last 8 characters of the fingerprint.
+
+$ sudo apt-key fingerprint 0EBFCD88
+
+pub   4096R/0EBFCD88 2017-02-22
+      Key fingerprint = 9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88
+uid                  Docker Release (CE deb) <docker@docker.com>
+sub   4096R/F273FCD8 2017-02-22
+
+Use the following command to set up the stable repository. You always need the stable repository, even if you want to install builds from the edge or test repositories as well. To add the edge or test repository, add the word edge or test (or both) after the word stable in the commands below.
+
+
+$ sudo add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+   $(lsb_release -cs) \
+   stable"
+
+INSTALL DOCKER CE
+
+Update the apt package index.
+
+$ sudo apt-get update
+
+Install the latest version of Docker CE, or go to the next step to install a specific version. Any existing installation of Docker is replaced.
+
+     $ sudo apt-get install docker-ce
+
+Verify that Docker CE is installed correctly by running the hello-world image.
+
+$ sudo docker run hello-world
+
+
+Step -2: (Service Discovery of containers on different hosts)
+
+We will create a Docker Swarm for Multi-host networking and Service discovery.
+
+Init your swarm
+
+Let’s create a Docker Swarm first. Open up the first instance and initiate Swarm mode cluster.
+
+docker swarm init --advertise-addr $(hostname -i)
+
+This node becomes a master node. The output displays a command to add a worker node to this swarm as shown below:
+Swarm initialized: current node (xf323rkhg80qy2pywkjkxqusp) is now a manager.
+
+To add a worker to this swarm, run the following command:
+
+    docker swarm join \
+    --token SWMTKN-1-089phhmfamjor1o1qj8s0l4wdhyvegphg6vtt9p3s8c35upltk-eecvhhtz1f2vpjhvc70v6v
+vzb \
+    10.0.50.3:2377
+
+To add a manager to this swarm, run 'docker swarm join-token manager' and follow the instructi
+ons.
+
+The above token ID is unique for every swarm mode cluster and hence might differ for your setup. From the output above, copy the join command (watch out for newlines).
+Next, Open up the new instance and paste the below command. This should join the new node to the swarm mode cluster and this new node becomes a worker node. In my case, the command would look something like this:
+
+ docker swarm join \
+    --token SWMTKN-1-089phhmfamjor1o1qj8s0l4wdhyvegphg6vtt9p3s8c35upltk-eecvhhtz1f2vpjhvc70v6v
+vzb \
+    10.0.50.3:2377
+
+Output:
+$ docker swarm join --token SWMTKN-1-089phhmfamjor1o1qj8s0l4wdhyvegphg6vtt9p3s8c35upltk-eecvhh
+tz1f2vpjhvc70v6vvzb 10.0.50.3:2377
+
+This node joined a swarm as a worker.
+
+Show members of swarm
+
+Type the below command in the first terminal:
+$docker node ls
+
+The output shows you both the manager and worker node indicating 2-node cluster:
+ID                                                         HOSTNAME  STATUS  AVAILABILITY  MANAGER STATUS
+xf323rkhg80qy2pywkjkxqusp *       node1          Ready       Active        Leader
+za75md1p0hpc2qswefj8uyktk         node2          Ready   Active
+
+
+Create an overlay network
+
+$docker network create -d overlay net1
+
+The above command generates an ID:
+4md6wyy0pdpdzku6dj2z7yxjf
+List out the newly created overlay network using the below command:
+
+$docker network ls
+
+The output should show the newly added network called “net1” holding swarm scope.
+NETWORK ID          NAME                       DRIVER             SCOPE
+c30f13d9c242        bridge                         bridge              local
+990fa0ad6ab6       docker_gwbridge      bridge              local
+c60123ff7abf          host                            host                  local
+v7sp7ev6xfoo         ingress                      overlay             swarm
+4md6wyy0pdpd     net1                           overlay             swarm
+333c7d045239        none                null
+
+
+
+
+We have to now create 2 services. One for MYSQL DB which will run on the worker node and the WordPress which will run in the manager node. The WordPress Service cannot be created yet because we have to modify the latest image and then create our own custom image from a Docker file. This custom image will be used to create the WordPress Service.
+
+* Creating MYSQL service
+$docker service create \
+           --replicas 1 \
+           --name wordpressdb \
+           --network net1 \
+           --env MYSQL_ROOT_PASSWORD=mysql123 \
+           --env MYSQL_DATABASE=wordpress \
+           -- constraint  ‘node.id == za75md1p0hpc2qswefj8uyktk’ \
+           mysql:latest
+
+
+
+The node.id above can be found from “docker node ls”
+
+
+Step 3: Creating a Wordpress image from a custom Dockerfile:
+
+We’ll create a folder in the host1(where we would like to run the wordpress container;
+$mkdir wordpress && cd wordpress
+
+We’ll create a self-signed key and certificate to be used for Apache webserver;
+
+$sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt
+
+Create a file called “Dockerfile” and enter the following contents;
+
+$cat Dockerfile
+#############################################################################
+FROM wordpress:latest
+
+#Copying ssl certs to required Apache location
+
+COPY ./server.key  /etc/apache2/ssl/
+COPY ./server.crt  /etc/apache2/ssl/
+
+# Copy the script.sh to the container, make it executable and RUN it
+
+ADD ./script.sh /usr/bin
+RUN chmod +x /usr/bin/script.sh
+RUN /usr/bin/script.sh
+
+# Install requirements for wp-cli support
+RUN sudo apt-get update \
+  && sudo apt-get install -y sudo less mysql-client \
+  && rm -rf /var/lib/apt/lists/*
+
+# Add WP-CLI 
+RUN curl -o /bin/wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+COPY wp-su.sh /bin/wp
+RUN chmod +x /bin/wp-cli.phar
+
+# Install Mail catcher
+
+RUN sudo apt-get install -y libsqlite3-dev ruby1.9.1-dev
+
+RUN sudo gem install mailcatcher
+ 
+ADD  ./mailcatcher.conf /etc/init/mailcatcher.conf
+
+RUN mailcatcher --foreground --http-ip=0.0.0.0
+
+RUN sudo service mailcatcher restart
+
+
+
+
+
+
+EXPOSE 80 443
+
+#############################################################################
+
+•	The “wordpress” folder that we are currently in should have the “script.sh” with the following contents;
+
+$cat script.sh
+
+#!/bin/bash
+
+
+
+
+###Use "sed" to insert the following code options in respective files
+
+
+##Changes to .htaccess options
+
+#Basic authentication
+
+<Files wp-login.php>
+AuthType Basic
+AuthName "Password Protected"
+AuthUserFile /full/path/to/.htpasswd
+Require valid-user
+Satisfy All
+</Files>
+
+#Require SSL
+
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301] 
+
+#Protect Sensitive Files
+<FilesMatch "^.*(error_log|wp-config\.php|php.ini|\.[hH][tT][aApP].*)$">
+Order deny,allow
+Deny from all
+</FilesMatch>
+
+#Force a domain to only use SSL (HTTPS) when using an .htaccess file to create a login prompt
+
+SSLOptions +StrictRequire
+SSLRequireSSL
+SSLRequire %{HTTP_HOST} eq "example.com"
+
+#Hide wp-config.php
+
+<Files wp-config.php>
+order allow,deny
+deny from all
+</Files>
+
+#Hide .htaccess
+
+<Files .htaccess>
+order allow,deny
+deny from all
+</Files>
+
+
+##Edit wp-config.php
+
+define('FORCE_SSL_ADMIN', true);
+
+#Compiling Apache with SSL
+
+sudo echo "Include /etc/apache2/mod_ssl.conf" >> /etc/apache2/apache2.conf 
+
+#
+#use sed to edit /etc/apache2/sites-enabled/yoursite 
+
+# =================================================
+# SSL/TLS settings
+# =================================================
+NameVirtualHost *:443
+
+<VirtualHost *:443>
+
+    DocumentRoot "/var/www/ssl_html"
+
+    SSLEngine on
+    SSLOptions +StrictRequire
+
+    <Directory />
+        SSLRequireSSL
+    </Directory>
+
+    SSLProtocol -all +TLSv1 +SSLv3
+    SSLCipherSuite HIGH:MEDIUM:!aNULL:+SHA1:+MD5:+HIGH:+MEDIUM
+
+    SSLRandomSeed startup file:/dev/urandom 1024
+    SSLRandomSeed connect file:/dev/urandom 1024
+
+    SSLSessionCache shm:/usr/local/apache2/logs/ssl_cache_shm
+    SSLSessionCacheTimeout 600    
+
+    SSLCertificateFile /etc/apache2/ssl/server.crt
+    SSLCertificateKeyFile /etc/apache2/ssl/server.key
+
+    SSLVerifyClient none
+    SSLProxyEngine off
+
+    <IfModule mime.c>
+        AddType application/x-x509-ca-cert      .crt
+        AddType application/x-pkcs7-crl         .crl
+    </IfModule>
+
+    SetEnvIf User-Agent ".*MSIE.*" \  
+      nokeepalive ssl-unclean-shutdown \  
+      downgrade-1.0 force-response-1.0
+</VirtualHost>
+
+#==================================
+
+sudo service apache2 restart
+
+
+•	The “wordpress” folder that we are currently in should have the “mailcatcher.conf” with the following contents;
+
+$cat mailcatcher.conf
+
+description "Mailcatcher" 
+start on runlevel [2345] 
+stop on runlevel [!2345] 
+respawn 
+exec /usr/bin/env $(which mailcatcher) --foreground --http-ip=0.0.0.0
+
+
+
+
+***The “wordpress” folder should contain the “Dockerfile”, the “server.key”, the “server.crt”, “mailcatcher.conf” and the “script.sh”
+
+
+We have to now build an image from the Dockerfile;
+
+$docker build –t wordpress_secure .
+
+Here we are building an image from the associated Dockerfile. The –t is the tag(wordpress_secure) and the trailing “.” means to use the Dockerfile present in the current directory.
+
+Creating WordPress service
+
+           docker service create \
+           --replicas 1 \
+           --name wordpressapp \
+           --network net1 \
+           --env WORDPRESS_DB_HOST=wordpressdb \
+           --env WORDPRESS_DB_PASSWORD=mysql123 \
+          -- constraint  ‘node.id == xf323rkhg80qy2pywkjkxqusp’ \
+          wordpress_secure
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
