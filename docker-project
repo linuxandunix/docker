@@ -1,6 +1,6 @@
-Project:
+#Project:
 
-Create Dockerized instances of Wordpress and Database running on two different hosts.
+#Create Dockerized instances of Wordpress and Database running on two different hosts.
 Secure the Wordpress and Apache.
 Install self-signed SSL certificates.
 Install Mail catcher.
